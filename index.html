@@ -276,6 +276,12 @@
             background: #f1f2f6;
         }
 
+        .log-entry.editing {
+            background: #e3f2fd;
+            border: 1px solid #0984e3;
+            margin: -1px;
+        }
+
         .log-entry:last-child {
             border-bottom: none;
         }
@@ -303,6 +309,34 @@
             color: #0984e3;
             font-size: 10px;
             display: block;
+        }
+
+        .editable-field {
+            background: white;
+            border: 1px solid #ddd;
+            padding: 2px 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            width: 100%;
+            margin: 1px 0;
+        }
+
+        .editable-field:focus {
+            outline: none;
+            border-color: #0984e3;
+        }
+
+        .log-meta {
+            font-size: 9px;
+            color: #636e72;
+            margin-top: 2px;
+        }
+
+        .edit-hint {
+            font-size: 9px;
+            color: #636e72;
+            font-style: italic;
+            margin-top: 2px;
         }
 
         .controls {
@@ -1141,7 +1175,7 @@ Data Structure:
                     <div class="log-stats" id="log-stats">Total: 0 | Duration: 0m | <span id="storage-status" style="color: #00b894;">Saved</span></div>
                 </div>
                 <div style="font-size: 9px; color: #636e72; margin-bottom: 5px; text-align: center;">
-                    Auto-cleanup: Max 100 observations • Max 20 displayed • 5min cleanup cycle
+                    Interactive log: Click entries to edit inline • Long press/right-click to delete • ESC to cancel
                 </div>
                 <div class="log-entries" id="log-entries">
                     <div style="padding: 20px; text-align: center; color: #636e72; font-size: 11px;">
@@ -1458,23 +1492,244 @@ Data Structure:
                 entry.className = 'log-entry';
                 entry.dataset.id = observation.id;
                 
-                const intensityIndicator = observation.intensity > 0 ? ` I:${observation.intensity}` : '';
-                const hasDetails = observation.trigger || observation.manifestation || 
-                                 (observation.notes && observation.notes !== 'Quick count');
-                const detailsText = hasDetails ? 
-                    (observation.trigger ? observation.trigger.substring(0, 25) + '...' : '[detailed]') : 
-                    '[quick count]';
-                
-                entry.innerHTML = `
-                    <div class="log-content">
-                        <span class="log-type">${itemLabels[observation.type].toUpperCase()}</span>
-                        <span class="log-details">#${observation.count} - ${detailsText}${intensityIndicator}</span>
-                    </div>
-                    <div class="log-time">${observation.timestamp.toLocaleTimeString()}</div>
-                `;
-                
+                updateLogEntryContent(entry, observation);
                 logEntries.appendChild(entry);
             });
+        }
+
+        // Update log entry content
+        function updateLogEntryContent(entry, observation) {
+            const intensityIndicator = observation.intensity > 0 ? ` I:${observation.intensity}` : '';
+            const hasDetails = observation.trigger || observation.manifestation || 
+                             (observation.notes && observation.notes !== 'Quick count');
+            const detailsText = hasDetails ? 
+                (observation.trigger ? observation.trigger.substring(0, 25) + '...' : '[detailed]') : 
+                '[quick count]';
+            
+            entry.innerHTML = `
+                <div class="log-content">
+                    <span class="log-type">${itemLabels[observation.type].toUpperCase()}</span>
+                    <span class="log-details">#${observation.count} - ${detailsText}${intensityIndicator}</span>
+                    <div class="edit-hint">Click to edit • Long press to delete</div>
+                </div>
+                <div class="log-time">${observation.timestamp.toLocaleTimeString()}</div>
+            `;
+            
+            // Add click handler for editing
+            entry.onclick = () => editLogEntry(observation.id);
+            
+            // Add long press for delete on mobile
+            let pressTimer;
+            entry.addEventListener('touchstart', (e) => {
+                pressTimer = setTimeout(() => {
+                    if (confirm('Delete this observation?')) {
+                        deleteLogEntry(observation.id);
+                    }
+                }, 800);
+            });
+            
+            entry.addEventListener('touchend', () => {
+                clearTimeout(pressTimer);
+            });
+            
+            // Right click for delete on desktop
+            entry.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                if (confirm('Delete this observation?')) {
+                    deleteLogEntry(observation.id);
+                }
+            });
+        }
+
+        // Edit log entry inline
+        function editLogEntry(observationId) {
+            const observation = sessionData.find(obs => obs.id === observationId);
+            if (!observation) return;
+            
+            const entry = document.querySelector(`[data-id="${observationId}"]`);
+            if (entry.classList.contains('editing')) return;
+            
+            // Store original content for cancel
+            const originalContent = entry.innerHTML;
+            
+            entry.classList.add('editing');
+            entry.onclick = null;
+            
+            entry.innerHTML = `
+                <div class="log-content">
+                    <div class="log-type">${itemLabels[observation.type].toUpperCase()} #${observation.count}</div>
+                    <input type="text" class="editable-field" id="edit-trigger-${observationId}" 
+                           value="${observation.trigger}" placeholder="Trigger..." 
+                           onblur="saveLogEntry(${observationId})">
+                    <input type="text" class="editable-field" id="edit-manifestation-${observationId}" 
+                           value="${observation.manifestation}" placeholder="How it showed up..." 
+                           onblur="saveLogEntry(${observationId})">
+                    <div style="display: flex; gap: 4px; align-items: center; margin: 2px 0;">
+                        <span style="font-size: 9px;">Intensity:</span>
+                        <input type="range" min="1" max="10" value="${observation.intensity}" 
+                               style="flex: 1; height: 12px;" id="edit-intensity-${observationId}"
+                               onchange="saveLogEntry(${observationId})">
+                        <span style="font-size: 9px; min-width: 15px;" id="edit-intensity-val-${observationId}">${observation.intensity}</span>
+                    </div>
+                    <input type="text" class="editable-field" id="edit-notes-${observationId}" 
+                           value="${observation.notes}" placeholder="Additional notes..." 
+                           onblur="saveLogEntry(${observationId})">
+                    <div class="log-meta">Click outside to save • ESC to cancel</div>
+                </div>
+                <div class="log-time">${observation.timestamp.toLocaleTimeString()}</div>
+            `;
+            
+            // Focus first field
+            const triggerField = document.getElementById(`edit-trigger-${observationId}`);
+            if (triggerField) triggerField.focus();
+            
+            // Setup intensity slider
+            const slider = document.getElementById(`edit-intensity-${observationId}`);
+            const valueDisplay = document.getElementById(`edit-intensity-val-${observationId}`);
+            if (slider && valueDisplay) {
+                const updateIntensity = function() {
+                    valueDisplay.textContent = this.value;
+                };
+                slider.addEventListener('input', updateIntensity);
+                
+                // Store cleanup function on the entry element
+                entry._cleanup = () => {
+                    slider.removeEventListener('input', updateIntensity);
+                };
+            }
+            
+            // Handle ESC key to cancel
+            const handleEscape = (e) => {
+                if (e.key === 'Escape') {
+                    cancelLogEdit(observationId, originalContent);
+                    document.removeEventListener('keydown', handleEscape);
+                }
+            };
+            document.addEventListener('keydown', handleEscape);
+            
+            // Store cleanup function on the entry element
+            entry._escapeCleanup = () => {
+                document.removeEventListener('keydown', handleEscape);
+            };
+        }
+
+        // Save log entry changes
+        function saveLogEntry(observationId) {
+            // Add small delay to prevent conflicts when clicking between fields
+            setTimeout(() => {
+                const observation = sessionData.find(obs => obs.id === observationId);
+                if (!observation) return;
+                
+                const entry = document.querySelector(`[data-id="${observationId}"]`);
+                if (!entry || !entry.classList.contains('editing')) return;
+                
+                // Get updated values
+                const trigger = document.getElementById(`edit-trigger-${observationId}`)?.value.trim() || '';
+                const manifestation = document.getElementById(`edit-manifestation-${observationId}`)?.value.trim() || '';
+                const intensity = parseInt(document.getElementById(`edit-intensity-${observationId}`)?.value) || 0;
+                const notes = document.getElementById(`edit-notes-${observationId}`)?.value.trim() || '';
+                
+                // Check if any changes were made
+                const hasChanges = observation.trigger !== trigger || 
+                                 observation.manifestation !== manifestation ||
+                                 observation.intensity !== intensity ||
+                                 observation.notes !== notes;
+                
+                if (hasChanges) {
+                    // Update observation data
+                    observation.trigger = trigger;
+                    observation.manifestation = manifestation;
+                    observation.intensity = intensity;
+                    observation.notes = notes;
+                    
+                    saveToStorage();
+                    showToast('Entry updated', 'success', 1500);
+                }
+                
+                // Clean up event handlers
+                if (entry._cleanup) {
+                    entry._cleanup();
+                    delete entry._cleanup;
+                }
+                if (entry._escapeCleanup) {
+                    entry._escapeCleanup();
+                    delete entry._escapeCleanup;
+                }
+                
+                // Update display
+                entry.classList.remove('editing');
+                updateLogEntryContent(entry, observation);
+            }, 100);
+        }
+
+        // Cancel log entry edit
+        function cancelLogEdit(observationId, originalContent) {
+            const entry = document.querySelector(`[data-id="${observationId}"]`);
+            if (!entry) return;
+            
+            // Clean up event handlers
+            if (entry._cleanup) {
+                entry._cleanup();
+                delete entry._cleanup;
+            }
+            if (entry._escapeCleanup) {
+                entry._escapeCleanup();
+                delete entry._escapeCleanup;
+            }
+            
+            entry.classList.remove('editing');
+            entry.innerHTML = originalContent;
+            
+            // Re-establish event handlers
+            const observation = sessionData.find(obs => obs.id == observationId);
+            if (observation) {
+                updateLogEntryContent(entry, observation);
+            }
+        }
+
+        // Delete log entry
+        function deleteLogEntry(observationId) {
+            const index = sessionData.findIndex(obs => obs.id === observationId);
+            if (index === -1) return;
+            
+            const observation = sessionData[index];
+            sessionData.splice(index, 1);
+            
+            // Update count
+            counts[observation.type] = Math.max(0, counts[observation.type] - 1);
+            document.getElementById(`${observation.type}-count`).textContent = counts[observation.type];
+            
+            // Remove from DOM
+            const entry = document.querySelector(`[data-id="${observationId}"]`);
+            if (entry) {
+                // Clean up event listeners
+                if (entry._cleanup) {
+                    entry._cleanup();
+                    delete entry._cleanup;
+                }
+                if (entry._escapeCleanup) {
+                    entry._escapeCleanup();
+                    delete entry._escapeCleanup;
+                }
+                entry.remove();
+            }
+            
+            // Show placeholder if no entries
+            const logEntries = document.getElementById('log-entries');
+            if (sessionData.length === 0) {
+                logEntries.innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #636e72; font-size: 11px;">
+                        No observations yet. Click on any item above to start observing.<br>
+                        <span style="font-size: 10px; margin-top: 5px; display: block;">
+                            Tip: Click log entries to edit • Long press/right-click to delete
+                        </span>
+                    </div>
+                `;
+            }
+            
+            saveToStorage();
+            updateStats();
+            showToast('Observation deleted', 'info', 1500);
         }
 
         // Update session stats
